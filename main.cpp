@@ -29,6 +29,7 @@
 
 #include "MeshDataTetraElement.h"
 #include "MeshDataBrickElement.h"
+#include "MeshDataNonConformingHexaElement.h"
 #include "ResistivityBlock.h"
 
 enum PlaneType{
@@ -40,6 +41,7 @@ enum PlaneType{
 enum ElementType{
 	TETRA = 0,
 	BRICK,
+	NONCONFORMING_HEXA
 };
 
 struct Coord3D{
@@ -67,6 +69,7 @@ void run( const std::string& paramFile );
 void readParameterFile( const std::string& paramFile );
 void makeCutaway();
 void makeCutawayBrick();
+void makeCutawayNonconformingHexa();
 bool calcIntersectPoint( const double* coord0, const double* coord1, std::vector<Coord3D>& coordIntersect );
 double calcInnerProductWithNormalVec( const double* vec );
 void calcNormalVector( const int planeType, const double rotationAngle, double* normalVector );
@@ -93,6 +96,9 @@ void run( const std::string& paramFile ){
 		case BRICK:
 			makeCutawayBrick();
 			break;
+		case NONCONFORMING_HEXA:
+			makeCutawayNonconformingHexa();
+			break;
 		default:
 			std::cerr << "Unknown plane type !!" << std::endl;
 			exit(1);
@@ -116,6 +122,9 @@ void readParameterFile( const std::string& paramFile ){
 			break;
 		case BRICK:
 			std::cout << "Element type : Brick" << std::endl;
+			break;
+		case NONCONFORMING_HEXA:
+			std::cout << "Element type : Nonconforming Hexa" << std::endl;
 			break;
 		default:
 			std::cerr << "Unknown plane type !!" << std::endl;
@@ -295,6 +304,87 @@ void makeCutawayBrick(){
 				m_meshDataBrickElement.getZCoordinatesOfNodes(nodeID1)
 			};
 
+			std::vector<Coord3D> coordIntersect3D;
+			double vec[2] = { 0.0, 0.0 };
+			calcIntersectPoint(coord0, coord1, coordIntersect3D);
+			for( std::vector<Coord3D>::iterator itr = coordIntersect3D.begin(); itr != coordIntersect3D.end(); ++itr ){
+				Coord2D coord = { 0.0, 0.0 };
+				switch (m_planeType){
+					case ZX_PLANE:
+						coord.X = m_normalVector[1]*(itr->X - m_centerCoord[0]) - m_normalVector[0]*(itr->Y - m_centerCoord[1]);
+						coord.Y = itr->Z;
+						break;
+					case XY_PLANE:
+						vec[0] = itr->Y;
+						vec[1] = itr->X;
+						coord.X = vec[0] * cos( - m_rotationAngle ) - vec[1] * sin( - m_rotationAngle );
+						coord.Y = vec[0] * sin( - m_rotationAngle ) + vec[1] * cos( - m_rotationAngle );
+						break;
+					default:
+						std::cerr << "Unknown plane type !!" << std::endl;
+						exit(1);
+						break;
+				}
+				coordIntersectVec.push_back(coord);
+			}
+		}
+
+		if( static_cast<int>(coordIntersectVec.size()) >= 3 ){
+			deleteSamePoints(coordIntersectVec);
+			reorderPoints(coordIntersectVec);
+			meterToKilometer(coordIntersectVec);
+			ofs << "> -Z " << std::setw(15) << std::scientific << log10(m_ResistivityBlock.getResistivityValuesFromBlockID(blockID)) << std::endl;
+			for( std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr ){
+				ofs << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+			}
+			ofs << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+		}
+	}
+
+	ofs.close();
+
+}
+
+void makeCutawayNonconformingHexa(){
+
+	MeshDataNonConformingHexaElement m_meshDataNonConformingHexaElement;
+
+	m_meshDataNonConformingHexaElement.inputMeshData();
+	m_ResistivityBlock.inputResisitivityBlock(m_numIteration);
+
+	std::ostringstream ofile;
+	ofile << "resistivity_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofs( ofile.str().c_str(), std::ios::out );
+	if( ofs.fail() ){
+		std::cerr << "File open error : " << ofile.str() << " !!" << std::endl;
+		exit(1);
+	}
+
+	ofs.precision(6);
+
+	const int numElem = m_meshDataNonConformingHexaElement.getNumElemTotal();
+	const int numEdgeOnElem = 12;
+	for( int iElem = 0; iElem < numElem; ++iElem ){
+		std::vector<Coord2D> coordIntersectVec;
+
+		const int blockID = m_ResistivityBlock.getBlockIDFromElemID(iElem);
+		if( find(m_blockExcluded.begin(), m_blockExcluded.end(), blockID) != m_blockExcluded.end() ){
+			continue;// Excluded
+		};
+
+		for( int iEdge = 0; iEdge < numEdgeOnElem; ++iEdge ){
+			const int nodeID0 = m_meshDataNonConformingHexaElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 0);
+			const double coord0[3] = {
+				m_meshDataNonConformingHexaElement.getXCoordinatesOfNodes(nodeID0),
+				m_meshDataNonConformingHexaElement.getYCoordinatesOfNodes(nodeID0),
+				m_meshDataNonConformingHexaElement.getZCoordinatesOfNodes(nodeID0)
+			};
+			const int nodeID1 = m_meshDataNonConformingHexaElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 1);
+			const double coord1[3] = {
+				m_meshDataNonConformingHexaElement.getXCoordinatesOfNodes(nodeID1),
+				m_meshDataNonConformingHexaElement.getYCoordinatesOfNodes(nodeID1),
+				m_meshDataNonConformingHexaElement.getZCoordinatesOfNodes(nodeID1)
+			};
 			std::vector<Coord3D> coordIntersect3D;
 			double vec[2] = { 0.0, 0.0 };
 			calcIntersectPoint(coord0, coord1, coordIntersect3D);

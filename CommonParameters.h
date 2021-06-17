@@ -73,6 +73,18 @@ struct DoubleMatrix2x2{
 	double comp22;
 };
 
+struct DoubleMatrix3x3{
+	double comp11;
+	double comp12;
+	double comp13;
+	double comp21;
+	double comp22;
+	double comp23;
+	double comp31;
+	double comp32;
+	double comp33;
+};
+
 struct Vector3D{
 	double X;
 	double Y;
