@@ -464,7 +464,7 @@ bool calcIntersectPoint( const double* coord0, const double* coord1, std::vector
 	else{
 		const Coord3D coordAdded0 = { coord0[0], coord0[1], coord0[2] };
 		coordIntersect.push_back(coordAdded0);
-		const Coord3D coordAdded1 = { coord0[1], coord1[1], coord1[2] };
+		const Coord3D coordAdded1 = { coord1[0], coord1[1], coord1[2] }; 
 		coordIntersect.push_back(coordAdded1);
 	}
 
