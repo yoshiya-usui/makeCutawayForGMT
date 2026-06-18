@@ -38,6 +38,8 @@
 #include "MeshDataBrickElement.h"
 #include "MeshDataNonConformingHexaElement.h"
 #include "ResistivityBlock.h"
+#include "ResistivityBlockIsotropic.h"
+#include "ResistivityBlockAnisotropic.h"
 
 enum PlaneType{
 	UNKNOWN = -1,
@@ -62,7 +64,7 @@ struct Coord2D{
 	double Y;
 };
 
-ResistivityBlock m_ResistivityBlock;
+ResistivityBlock* m_ptrResistivityBlock(NULL);
 
 int m_elementType = 0;
 int m_numIteration = 0;
@@ -71,12 +73,15 @@ double m_centerCoord[3];
 double m_rotationAngle = 0.0;
 double m_normalVector[3];
 std::vector<int> m_blockExcluded;
+double m_anisotropyThreshold(0.0);
 
-void run( const std::string& paramFile );
-void readParameterFile( const std::string& paramFile );
-void makeCutaway();
+void run(const bool isAnisotropic, const std::string& paramFile);
+void readParameterFile(const bool isAnisotropic, const std::string& paramFile);
+void makeCutawayTetraIsotropic();
+void makeCutawayTetraAnisotropic();
 void makeCutawayBrick();
-void makeCutawayNonconformingHexa();
+void makeCutawayNonconformingHexaIsotropic();
+void makeCutawayNonconformingHexaAnisotropic();
 bool calcIntersectPoint( const double* coord0, const double* coord1, std::vector<Coord3D>& coordIntersect );
 double calcInnerProductWithNormalVec( const double* vec );
 void calcNormalVector( const int planeType, const double rotationAngle, double* normalVector );
@@ -85,36 +90,56 @@ void reorderPoints( std::vector<Coord2D>& vec );
 void meterToKilometer( std::vector<Coord2D>& vec );
 
 int main( int argc, char* argv[] ){
-	if( argc < 2 ){
+
+	if (argc < 2) {
 		std::cerr << "You must specify parameter file  !!" << std::endl;
 		exit(1);
 	}
-	run( argv[1] );
-	return 0;
-}
-
-void run( const std::string& paramFile ){
-
-	readParameterFile(paramFile);
-	switch (m_elementType){
-		case TETRA:
-			makeCutaway();
-			break;
-		case BRICK:
-			makeCutawayBrick();
-			break;
-		case NONCONFORMING_HEXA:
-			makeCutawayNonconformingHexa();
-			break;
-		default:
-			std::cerr << "Unknown plane type !!" << std::endl;
-			exit(1);
-			break;
+	bool isAnisotropic(false);
+	std::string inputFileName;
+	for (int iarg = 1; iarg < argc; ++iarg) {
+		const std::string sbuf = argv[iarg];
+		if (sbuf.substr(0, 6).compare("-aniso") == 0) {
+			isAnisotropic = true;
+		} else {
+			inputFileName = sbuf;
+		}
 	}
+	run(isAnisotropic, inputFileName);
+	return 0;
 
 }
 
-void readParameterFile( const std::string& paramFile ){
+void run(const bool isAnisotropic, const std::string& paramFile) {
+
+	readParameterFile(isAnisotropic, paramFile);
+	if (isAnisotropic) {
+		m_ptrResistivityBlock = new ResistivityBlockAnisotropic();
+	}
+	else {
+		m_ptrResistivityBlock = new ResistivityBlockIsotropic();
+	}
+	m_ptrResistivityBlock->inputResistivityBlock(m_numIteration);
+	switch (m_elementType) {
+	case TETRA:
+		isAnisotropic ? makeCutawayTetraAnisotropic() :	makeCutawayTetraIsotropic();
+		break;
+	case BRICK:
+		makeCutawayBrick();
+		break;
+	case NONCONFORMING_HEXA:
+		isAnisotropic ? makeCutawayNonconformingHexaAnisotropic() : makeCutawayNonconformingHexaIsotropic();
+		break;
+	default:
+		std::cerr << "Unknown element type !!" << std::endl;
+		exit(1);
+		break;
+	}
+	delete m_ptrResistivityBlock;
+
+}
+
+void readParameterFile(const bool isAnisotropic, const std::string& paramFile) {
 
 	std::ifstream ifs( paramFile.c_str(), std::ios::in );
 	if( ifs.fail() ){
@@ -181,18 +206,22 @@ void readParameterFile( const std::string& paramFile ){
 		std::cout << *itr << std::endl;
 	}
 
+	if (isAnisotropic) {
+		ifs >> m_anisotropyThreshold;
+		std::cout << "The threshold of anisotropy above which strike and dip are outputted : " << m_anisotropyThreshold << std::endl;
+	}
+
 	ifs.close();
 
 	calcNormalVector( m_planeType, m_rotationAngle, m_normalVector );
 
 }
 
-void makeCutaway(){
+void makeCutawayTetraIsotropic() {
 
-	MeshDataTetraElement m_meshDataTetraElement;
+	MeshDataTetraElement meshDataTetraElement;
 
-	m_meshDataTetraElement.inputMeshData();
-	m_ResistivityBlock.inputResisitivityBlock(m_numIteration);
+	meshDataTetraElement.inputMeshData();
 
 	std::ostringstream ofile;
 	ofile << "resistivity_GMT_iter" << m_numIteration << ".dat";
@@ -201,31 +230,31 @@ void makeCutaway(){
 		std::cerr << "File open error : " << ofile.str() << " !!" << std::endl;
 		exit(1);
 	}
-
 	ofs.precision(6);
 
-	const int numElem = m_meshDataTetraElement.getNumElemTotal();
+	const std::string splitter = CommonParameters::isGMT5OrHigher ? "> -Z" : "> -Z ";
+
+	const int numElem = meshDataTetraElement.getNumElemTotal();
 	const int numEdgeOnElem = 6;
 	for( int iElem = 0; iElem < numElem; ++iElem ){
 		std::vector<Coord2D> coordIntersectVec;
-
-		const int blockID = m_ResistivityBlock.getBlockIDFromElemID(iElem);
+		const int blockID = m_ptrResistivityBlock->getBlockIDFromElemID(iElem);
 		if( find(m_blockExcluded.begin(), m_blockExcluded.end(), blockID) != m_blockExcluded.end() ){
 			continue;// Excluded
 		};
 
 		for( int iEdge = 0; iEdge < numEdgeOnElem; ++iEdge ){
-			const int nodeID0 = m_meshDataTetraElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 0);
+			const int nodeID0 = meshDataTetraElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 0);
 			const double coord0[3] = {
-				m_meshDataTetraElement.getXCoordinatesOfNodes(nodeID0),
-				m_meshDataTetraElement.getYCoordinatesOfNodes(nodeID0),
-				m_meshDataTetraElement.getZCoordinatesOfNodes(nodeID0)
+				meshDataTetraElement.getXCoordinatesOfNodes(nodeID0),
+				meshDataTetraElement.getYCoordinatesOfNodes(nodeID0),
+				meshDataTetraElement.getZCoordinatesOfNodes(nodeID0)
 			};
-			const int nodeID1 = m_meshDataTetraElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 1);
+			const int nodeID1 = meshDataTetraElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 1);
 			const double coord1[3] = {
-				m_meshDataTetraElement.getXCoordinatesOfNodes(nodeID1),
-				m_meshDataTetraElement.getYCoordinatesOfNodes(nodeID1),
-				m_meshDataTetraElement.getZCoordinatesOfNodes(nodeID1)
+				meshDataTetraElement.getXCoordinatesOfNodes(nodeID1),
+				meshDataTetraElement.getYCoordinatesOfNodes(nodeID1),
+				meshDataTetraElement.getZCoordinatesOfNodes(nodeID1)
 			};
 
 			std::vector<Coord3D> coordIntersect3D;
@@ -258,7 +287,7 @@ void makeCutaway(){
 			deleteSamePoints(coordIntersectVec);
 			reorderPoints(coordIntersectVec);
 			meterToKilometer(coordIntersectVec);
-			ofs << "> -Z " << std::setw(15) << std::scientific << log10(m_ResistivityBlock.getResistivityValuesFromBlockID(blockID)) << std::endl;
+			ofs << splitter << log10(dynamic_cast<ResistivityBlockIsotropic*>(m_ptrResistivityBlock)->getResistivityValuesFromBlockID(blockID)) << std::endl;
 			for( std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr ){
 				ofs << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
 			}
@@ -267,15 +296,195 @@ void makeCutaway(){
 	}
 
 	ofs.close();
+
+}
+
+void makeCutawayTetraAnisotropic() {
+
+	MeshDataTetraElement meshDataTetraElement;
+	meshDataTetraElement.inputMeshData();
+
+	std::ostringstream ofileRhoXX;
+	ofileRhoXX << "rhoXX_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofsRhoXX(ofileRhoXX.str().c_str(), std::ios::out);
+	if (ofsRhoXX.fail()) {
+		std::cerr << "File open error : " << ofileRhoXX.str() << " !!" << std::endl;
+		exit(1);
+	}
+	ofsRhoXX.precision(6);
+
+	std::ostringstream ofileRhoYY;
+	ofileRhoYY << "rhoYY_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofsRhoYY(ofileRhoYY.str().c_str(), std::ios::out);
+	if (ofsRhoYY.fail()) {
+		std::cerr << "File open error : " << ofileRhoYY.str() << " !!" << std::endl;
+		exit(1);
+	}
+	ofsRhoYY.precision(6);
+
+	std::ostringstream ofileRhoZZ;
+	ofileRhoZZ << "rhoZZ_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofsRhoZZ(ofileRhoZZ.str().c_str(), std::ios::out);
+	if (ofsRhoZZ.fail()) {
+		std::cerr << "File open error : " << ofileRhoZZ.str() << " !!" << std::endl;
+		exit(1);
+	}
+	ofsRhoZZ.precision(6);
+
+	std::ostringstream ofileAnisotropy;
+	ofileAnisotropy << "anisotropy_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofsAnisotropy(ofileAnisotropy.str().c_str(), std::ios::out);
+	if (ofsAnisotropy.fail()) {
+		std::cerr << "File open error : " << ofileAnisotropy.str() << " !!" << std::endl;
+		exit(1);
+	}
+	ofsAnisotropy.precision(6);
+
+	std::ostringstream ofileStrike;
+	ofileStrike << "strike_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofsStrike(ofileStrike.str().c_str(), std::ios::out);
+	if (ofsStrike.fail()) {
+		std::cerr << "File open error : " << ofileStrike.str() << " !!" << std::endl;
+		exit(1);
+	}
+	ofsStrike.precision(6);
+
+	std::ostringstream ofileDip;
+	ofileDip << "dip_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofsDip(ofileDip.str().c_str(), std::ios::out);
+	if (ofsDip.fail()) {
+		std::cerr << "File open error : " << ofileDip.str() << " !!" << std::endl;
+		exit(1);
+	}
+	ofsDip.precision(6);
+
+	std::ostringstream ofileSlant;
+	ofileSlant << "slant_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofsSlant(ofileSlant.str().c_str(), std::ios::out);
+	if (ofsSlant.fail()) {
+		std::cerr << "File open error : " << ofileSlant.str() << " !!" << std::endl;
+		exit(1);
+	}
+	ofsSlant.precision(6);
+
+	const std::string splitter = CommonParameters::isGMT5OrHigher ? "> -Z" : "> -Z ";
+
+	const int numElem = meshDataTetraElement.getNumElemTotal();
+	const int numEdgeOnElem = 6;
+	for (int iElem = 0; iElem < numElem; ++iElem) {
+		std::vector<Coord2D> coordIntersectVec;
+		const int blockID = m_ptrResistivityBlock->getBlockIDFromElemID(iElem);
+		if (find(m_blockExcluded.begin(), m_blockExcluded.end(), blockID) != m_blockExcluded.end()) {
+			continue;// Excluded
+		};
+
+		for (int iEdge = 0; iEdge < numEdgeOnElem; ++iEdge) {
+			const int nodeID0 = meshDataTetraElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 0);
+			const double coord0[3] = {
+				meshDataTetraElement.getXCoordinatesOfNodes(nodeID0),
+				meshDataTetraElement.getYCoordinatesOfNodes(nodeID0),
+				meshDataTetraElement.getZCoordinatesOfNodes(nodeID0)
+			};
+			const int nodeID1 = meshDataTetraElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 1);
+			const double coord1[3] = {
+				meshDataTetraElement.getXCoordinatesOfNodes(nodeID1),
+				meshDataTetraElement.getYCoordinatesOfNodes(nodeID1),
+				meshDataTetraElement.getZCoordinatesOfNodes(nodeID1)
+			};
+
+			std::vector<Coord3D> coordIntersect3D;
+			double vec[2] = { 0.0, 0.0 };
+			//if(calcIntersectPoint(coord0, coord1, coordIntersect)){
+			calcIntersectPoint(coord0, coord1, coordIntersect3D);
+			for (std::vector<Coord3D>::iterator itr = coordIntersect3D.begin(); itr != coordIntersect3D.end(); ++itr) {
+				Coord2D coord = { 0.0, 0.0 };
+				switch (m_planeType) {
+				case ZX_PLANE:
+					coord.X = m_normalVector[1] * (itr->X - m_centerCoord[0]) - m_normalVector[0] * (itr->Y - m_centerCoord[1]);
+					coord.Y = itr->Z;
+					break;
+				case XY_PLANE:
+					vec[0] = itr->Y;
+					vec[1] = itr->X;
+					coord.X = vec[0] * cos(-m_rotationAngle) - vec[1] * sin(-m_rotationAngle);
+					coord.Y = vec[0] * sin(-m_rotationAngle) + vec[1] * cos(-m_rotationAngle);
+					break;
+				default:
+					std::cerr << "Unknown plane type !!" << std::endl;
+					exit(1);
+					break;
+				}
+				coordIntersectVec.push_back(coord);
+			}
+		}
+
+		if (static_cast<int>(coordIntersectVec.size()) >= 3) {
+			deleteSamePoints(coordIntersectVec);
+			reorderPoints(coordIntersectVec);
+			meterToKilometer(coordIntersectVec);
+			const ResistivityBlockAnisotropic::AnistropicResistivityParameters params = dynamic_cast<ResistivityBlockAnisotropic*>(m_ptrResistivityBlock)->getAnisotropicResistivityParametersFromBlockID(blockID);
+
+			ofsRhoXX << splitter << log10(params.rhoXX) << std::endl;
+			for (std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr) {
+				ofsRhoXX << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+			}
+			ofsRhoXX << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+
+			ofsRhoYY << splitter << log10(params.rhoYY) << std::endl;
+			for (std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr) {
+				ofsRhoYY << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+			}
+			ofsRhoYY << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+
+			ofsRhoZZ << splitter << log10(params.rhoZZ) << std::endl;
+			for (std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr) {
+				ofsRhoZZ << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+			}
+			ofsRhoZZ << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+
+			const double anisotropy = fabs(log10(params.rhoXX) - log10(params.rhoYY));
+			ofsAnisotropy << splitter << anisotropy << std::endl;
+			for (std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr) {
+				ofsAnisotropy << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+			}
+			ofsAnisotropy << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+
+			if (anisotropy > m_anisotropyThreshold) {
+				ofsStrike << splitter << params.strike * CommonParameters::rad2deg << std::endl;
+				for (std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr) {
+					ofsStrike << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+				}
+				ofsStrike << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+
+				ofsDip << splitter << params.dip * CommonParameters::rad2deg << std::endl;
+				for (std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr) {
+					ofsDip << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+				}
+				ofsDip << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+
+				ofsSlant << splitter << params.slant * CommonParameters::rad2deg << std::endl;
+				for (std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr) {
+					ofsSlant << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+				}
+				ofsSlant << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+			}
+		}
+	}
+
+	ofsRhoXX.close();
+	ofsRhoYY.close();
+	ofsRhoZZ.close();
+	ofsAnisotropy.close();
+	ofsStrike.close();
+	ofsDip.close();
+	ofsSlant.close();
 
 }
 
 void makeCutawayBrick(){
 
-	MeshDataBrickElement m_meshDataBrickElement;
-
-	m_meshDataBrickElement.inputMeshData();
-	m_ResistivityBlock.inputResisitivityBlock(m_numIteration);
+	MeshDataBrickElement meshDataBrickElement;
+	meshDataBrickElement.inputMeshData();
 
 	std::ostringstream ofile;
 	ofile << "resistivity_GMT_iter" << m_numIteration << ".dat";
@@ -287,28 +496,29 @@ void makeCutawayBrick(){
 
 	ofs.precision(6);
 
-	const int numElem = m_meshDataBrickElement.getNumElemTotal();
+	const std::string splitter = CommonParameters::isGMT5OrHigher ? "> -Z" : "> -Z ";
+
+	const int numElem = meshDataBrickElement.getNumElemTotal();
 	const int numEdgeOnElem = 12;
 	for( int iElem = 0; iElem < numElem; ++iElem ){
 		std::vector<Coord2D> coordIntersectVec;
-
-		const int blockID = m_ResistivityBlock.getBlockIDFromElemID(iElem);
+		const int blockID = m_ptrResistivityBlock->getBlockIDFromElemID(iElem);
 		if( find(m_blockExcluded.begin(), m_blockExcluded.end(), blockID) != m_blockExcluded.end() ){
 			continue;// Excluded
 		};
 
 		for( int iEdge = 0; iEdge < numEdgeOnElem; ++iEdge ){
-			const int nodeID0 = m_meshDataBrickElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 0);
+			const int nodeID0 = meshDataBrickElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 0);
 			const double coord0[3] = {
-				m_meshDataBrickElement.getXCoordinatesOfNodes(nodeID0),
-				m_meshDataBrickElement.getYCoordinatesOfNodes(nodeID0),
-				m_meshDataBrickElement.getZCoordinatesOfNodes(nodeID0)
+				meshDataBrickElement.getXCoordinatesOfNodes(nodeID0),
+				meshDataBrickElement.getYCoordinatesOfNodes(nodeID0),
+				meshDataBrickElement.getZCoordinatesOfNodes(nodeID0)
 			};
-			const int nodeID1 = m_meshDataBrickElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 1);
+			const int nodeID1 = meshDataBrickElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 1);
 			const double coord1[3] = {
-				m_meshDataBrickElement.getXCoordinatesOfNodes(nodeID1),
-				m_meshDataBrickElement.getYCoordinatesOfNodes(nodeID1),
-				m_meshDataBrickElement.getZCoordinatesOfNodes(nodeID1)
+				meshDataBrickElement.getXCoordinatesOfNodes(nodeID1),
+				meshDataBrickElement.getYCoordinatesOfNodes(nodeID1),
+				meshDataBrickElement.getZCoordinatesOfNodes(nodeID1)
 			};
 
 			std::vector<Coord3D> coordIntersect3D;
@@ -340,7 +550,7 @@ void makeCutawayBrick(){
 			deleteSamePoints(coordIntersectVec);
 			reorderPoints(coordIntersectVec);
 			meterToKilometer(coordIntersectVec);
-			ofs << "> -Z " << std::setw(15) << std::scientific << log10(m_ResistivityBlock.getResistivityValuesFromBlockID(blockID)) << std::endl;
+			ofs << splitter << log10(dynamic_cast<ResistivityBlockIsotropic*>(m_ptrResistivityBlock)->getResistivityValuesFromBlockID(blockID)) << std::endl;
 			for( std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr ){
 				ofs << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
 			}
@@ -352,12 +562,10 @@ void makeCutawayBrick(){
 
 }
 
-void makeCutawayNonconformingHexa(){
+void makeCutawayNonconformingHexaIsotropic() {
 
-	MeshDataNonConformingHexaElement m_meshDataNonConformingHexaElement;
-
-	m_meshDataNonConformingHexaElement.inputMeshData();
-	m_ResistivityBlock.inputResisitivityBlock(m_numIteration);
+	MeshDataNonConformingHexaElement meshDataNonConformingHexaElement;
+	meshDataNonConformingHexaElement.inputMeshData();
 
 	std::ostringstream ofile;
 	ofile << "resistivity_GMT_iter" << m_numIteration << ".dat";
@@ -369,28 +577,29 @@ void makeCutawayNonconformingHexa(){
 
 	ofs.precision(6);
 
-	const int numElem = m_meshDataNonConformingHexaElement.getNumElemTotal();
+	const std::string splitter = CommonParameters::isGMT5OrHigher ? "> -Z" : "> -Z ";
+
+	const int numElem = meshDataNonConformingHexaElement.getNumElemTotal();
 	const int numEdgeOnElem = 12;
 	for( int iElem = 0; iElem < numElem; ++iElem ){
 		std::vector<Coord2D> coordIntersectVec;
-
-		const int blockID = m_ResistivityBlock.getBlockIDFromElemID(iElem);
+		const int blockID = m_ptrResistivityBlock->getBlockIDFromElemID(iElem);
 		if( find(m_blockExcluded.begin(), m_blockExcluded.end(), blockID) != m_blockExcluded.end() ){
 			continue;// Excluded
 		};
 
 		for( int iEdge = 0; iEdge < numEdgeOnElem; ++iEdge ){
-			const int nodeID0 = m_meshDataNonConformingHexaElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 0);
+			const int nodeID0 = meshDataNonConformingHexaElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 0);
 			const double coord0[3] = {
-				m_meshDataNonConformingHexaElement.getXCoordinatesOfNodes(nodeID0),
-				m_meshDataNonConformingHexaElement.getYCoordinatesOfNodes(nodeID0),
-				m_meshDataNonConformingHexaElement.getZCoordinatesOfNodes(nodeID0)
+				meshDataNonConformingHexaElement.getXCoordinatesOfNodes(nodeID0),
+				meshDataNonConformingHexaElement.getYCoordinatesOfNodes(nodeID0),
+				meshDataNonConformingHexaElement.getZCoordinatesOfNodes(nodeID0)
 			};
-			const int nodeID1 = m_meshDataNonConformingHexaElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 1);
+			const int nodeID1 = meshDataNonConformingHexaElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 1);
 			const double coord1[3] = {
-				m_meshDataNonConformingHexaElement.getXCoordinatesOfNodes(nodeID1),
-				m_meshDataNonConformingHexaElement.getYCoordinatesOfNodes(nodeID1),
-				m_meshDataNonConformingHexaElement.getZCoordinatesOfNodes(nodeID1)
+				meshDataNonConformingHexaElement.getXCoordinatesOfNodes(nodeID1),
+				meshDataNonConformingHexaElement.getYCoordinatesOfNodes(nodeID1),
+				meshDataNonConformingHexaElement.getZCoordinatesOfNodes(nodeID1)
 			};
 			std::vector<Coord3D> coordIntersect3D;
 			double vec[2] = { 0.0, 0.0 };
@@ -421,7 +630,7 @@ void makeCutawayNonconformingHexa(){
 			deleteSamePoints(coordIntersectVec);
 			reorderPoints(coordIntersectVec);
 			meterToKilometer(coordIntersectVec);
-			ofs << "> -Z " << std::setw(15) << std::scientific << log10(m_ResistivityBlock.getResistivityValuesFromBlockID(blockID)) << std::endl;
+			ofs << splitter << log10(dynamic_cast<ResistivityBlockIsotropic*>(m_ptrResistivityBlock)->getResistivityValuesFromBlockID(blockID)) << std::endl;
 			for( std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr ){
 				ofs << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
 			}
@@ -430,6 +639,184 @@ void makeCutawayNonconformingHexa(){
 	}
 
 	ofs.close();
+
+}
+
+void makeCutawayNonconformingHexaAnisotropic() {
+
+	MeshDataNonConformingHexaElement meshDataNonConformingHexaElement;
+	meshDataNonConformingHexaElement.inputMeshData();
+
+	std::ostringstream ofileRhoXX;
+	ofileRhoXX << "rhoXX_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofsRhoXX(ofileRhoXX.str().c_str(), std::ios::out);
+	if (ofsRhoXX.fail()) {
+		std::cerr << "File open error : " << ofileRhoXX.str() << " !!" << std::endl;
+		exit(1);
+	}
+	ofsRhoXX.precision(6);
+
+	std::ostringstream ofileRhoYY;
+	ofileRhoYY << "rhoYY_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofsRhoYY(ofileRhoYY.str().c_str(), std::ios::out);
+	if (ofsRhoYY.fail()) {
+		std::cerr << "File open error : " << ofileRhoYY.str() << " !!" << std::endl;
+		exit(1);
+	}
+	ofsRhoYY.precision(6);
+
+	std::ostringstream ofileRhoZZ;
+	ofileRhoZZ << "rhoZZ_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofsRhoZZ(ofileRhoZZ.str().c_str(), std::ios::out);
+	if (ofsRhoZZ.fail()) {
+		std::cerr << "File open error : " << ofileRhoZZ.str() << " !!" << std::endl;
+		exit(1);
+	}
+	ofsRhoZZ.precision(6);
+
+	std::ostringstream ofileAnisotropy;
+	ofileAnisotropy << "anisotropy_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofsAnisotropy(ofileAnisotropy.str().c_str(), std::ios::out);
+	if (ofsAnisotropy.fail()) {
+		std::cerr << "File open error : " << ofileAnisotropy.str() << " !!" << std::endl;
+		exit(1);
+	}
+	ofsAnisotropy.precision(6);
+
+	std::ostringstream ofileStrike;
+	ofileStrike << "strike_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofsStrike(ofileStrike.str().c_str(), std::ios::out);
+	if (ofsStrike.fail()) {
+		std::cerr << "File open error : " << ofileStrike.str() << " !!" << std::endl;
+		exit(1);
+	}
+	ofsStrike.precision(6);
+
+	std::ostringstream ofileDip;
+	ofileDip << "dip_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofsDip(ofileDip.str().c_str(), std::ios::out);
+	if (ofsDip.fail()) {
+		std::cerr << "File open error : " << ofileDip.str() << " !!" << std::endl;
+		exit(1);
+	}
+	ofsDip.precision(6);
+
+	std::ostringstream ofileSlant;
+	ofileSlant << "slant_GMT_iter" << m_numIteration << ".dat";
+	std::ofstream ofsSlant(ofileSlant.str().c_str(), std::ios::out);
+	if (ofsSlant.fail()) {
+		std::cerr << "File open error : " << ofileSlant.str() << " !!" << std::endl;
+		exit(1);
+	}
+	ofsSlant.precision(6);
+
+	const std::string splitter = CommonParameters::isGMT5OrHigher ? "> -Z" : "> -Z ";
+
+	const int numElem = meshDataNonConformingHexaElement.getNumElemTotal();
+	const int numEdgeOnElem = 12;
+	for (int iElem = 0; iElem < numElem; ++iElem) {
+		std::vector<Coord2D> coordIntersectVec;
+		const int blockID = m_ptrResistivityBlock->getBlockIDFromElemID(iElem);
+		if (find(m_blockExcluded.begin(), m_blockExcluded.end(), blockID) != m_blockExcluded.end()) {
+			continue;// Excluded
+		};
+
+		for (int iEdge = 0; iEdge < numEdgeOnElem; ++iEdge) {
+			const int nodeID0 = meshDataNonConformingHexaElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 0);
+			const double coord0[3] = {
+				meshDataNonConformingHexaElement.getXCoordinatesOfNodes(nodeID0),
+				meshDataNonConformingHexaElement.getYCoordinatesOfNodes(nodeID0),
+				meshDataNonConformingHexaElement.getZCoordinatesOfNodes(nodeID0)
+			};
+			const int nodeID1 = meshDataNonConformingHexaElement.getNodeIDGlobalFromElementAndEdge(iElem, iEdge, 1);
+			const double coord1[3] = {
+				meshDataNonConformingHexaElement.getXCoordinatesOfNodes(nodeID1),
+				meshDataNonConformingHexaElement.getYCoordinatesOfNodes(nodeID1),
+				meshDataNonConformingHexaElement.getZCoordinatesOfNodes(nodeID1)
+			};
+			std::vector<Coord3D> coordIntersect3D;
+			double vec[2] = { 0.0, 0.0 };
+			calcIntersectPoint(coord0, coord1, coordIntersect3D);
+			for (std::vector<Coord3D>::iterator itr = coordIntersect3D.begin(); itr != coordIntersect3D.end(); ++itr) {
+				Coord2D coord = { 0.0, 0.0 };
+				switch (m_planeType) {
+				case ZX_PLANE:
+					coord.X = m_normalVector[1] * (itr->X - m_centerCoord[0]) - m_normalVector[0] * (itr->Y - m_centerCoord[1]);
+					coord.Y = itr->Z;
+					break;
+				case XY_PLANE:
+					vec[0] = itr->Y;
+					vec[1] = itr->X;
+					coord.X = vec[0] * cos(-m_rotationAngle) - vec[1] * sin(-m_rotationAngle);
+					coord.Y = vec[0] * sin(-m_rotationAngle) + vec[1] * cos(-m_rotationAngle);
+					break;
+				default:
+					std::cerr << "Unknown plane type !!" << std::endl;
+					exit(1);
+					break;
+				}
+				coordIntersectVec.push_back(coord);
+			}
+		}
+
+		if (static_cast<int>(coordIntersectVec.size()) >= 3) {
+			deleteSamePoints(coordIntersectVec);
+			reorderPoints(coordIntersectVec);
+			meterToKilometer(coordIntersectVec);
+			const ResistivityBlockAnisotropic::AnistropicResistivityParameters params = dynamic_cast<ResistivityBlockAnisotropic*>(m_ptrResistivityBlock)->getAnisotropicResistivityParametersFromBlockID(blockID);
+
+			ofsRhoXX << splitter << log10(params.rhoXX) << std::endl;
+			for (std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr) {
+				ofsRhoXX << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+			}
+			ofsRhoXX << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+
+			ofsRhoYY << splitter << log10(params.rhoYY) << std::endl;
+			for (std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr) {
+				ofsRhoYY << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+			}
+			ofsRhoYY << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+
+			ofsRhoZZ << splitter << log10(params.rhoZZ) << std::endl;
+			for (std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr) {
+				ofsRhoZZ << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+			}
+			ofsRhoZZ << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+
+			const double anisotropy = fabs(log10(params.rhoXX) - log10(params.rhoYY));
+			ofsAnisotropy << splitter << anisotropy << std::endl;
+			for (std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr) {
+				ofsAnisotropy << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+			}
+			ofsAnisotropy << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+
+			if (anisotropy > m_anisotropyThreshold) {
+				ofsStrike << splitter << params.strike * CommonParameters::rad2deg << std::endl;
+				for (std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr) {
+					ofsStrike << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+				}
+				ofsStrike << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+
+				ofsDip << splitter << params.dip * CommonParameters::rad2deg << std::endl;
+				for (std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr) {
+					ofsDip << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+				}
+				ofsDip << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+
+				ofsSlant << splitter << params.slant * CommonParameters::rad2deg << std::endl;
+				for (std::vector<Coord2D>::const_iterator itr = coordIntersectVec.begin(); itr != coordIntersectVec.end(); ++itr) {
+					ofsSlant << std::setw(15) << std::scientific << itr->X << std::setw(15) << std::scientific << itr->Y << std::endl;
+				}
+				ofsSlant << std::setw(15) << std::scientific << coordIntersectVec.front().X << std::setw(15) << std::scientific << coordIntersectVec.front().Y << std::endl;
+			}
+		}
+	}
+
+	ofsRhoXX.close();
+	ofsRhoYY.close();
+	ofsAnisotropy.close();
+	ofsStrike.close();
+	ofsDip.close();
 
 }
 
@@ -450,7 +837,7 @@ bool calcIntersectPoint( const double* coord0, const double* coord1, std::vector
 		return false;
 	}
 
-	const double EPS = 1.0e-12;
+	const double EPS = 1.0e-9;
 	const double sum = fabs(innerProduct0) + fabs(innerProduct1);
 	if( sum > EPS ){
 		const double ratio = fabs(innerProduct0) / sum;
@@ -464,7 +851,7 @@ bool calcIntersectPoint( const double* coord0, const double* coord1, std::vector
 	else{
 		const Coord3D coordAdded0 = { coord0[0], coord0[1], coord0[2] };
 		coordIntersect.push_back(coordAdded0);
-		const Coord3D coordAdded1 = { coord1[0], coord1[1], coord1[2] }; 
+		const Coord3D coordAdded1 = { coord1[1], coord1[1], coord1[2] };
 		coordIntersect.push_back(coordAdded1);
 	}
 

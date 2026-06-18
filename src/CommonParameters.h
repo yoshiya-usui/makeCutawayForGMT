@@ -35,13 +35,6 @@ static const int EY_POLARIZATION = 1;
 static const int TM_MODE = 0;
 static const int TE_MODE = 1;
 
-//// Flag specifing the way of numbering
-//enum numbering{
-//	XYZ=0,
-//	YZX=1,
-//	ZXY=2,
-//};
-//
 struct locationXY{
 	double X;
 	double Y;
@@ -159,9 +152,7 @@ static const double weights3Point[3] = { 0.555555555555556, 0.888888888888889, 0
 // Factor converting value from kilo-meter to meter
 static const double convKilometerToMeter = 1000.0;
 
-static char programName[]="femtic";
-
-static char versionID[]="1.1 Beta";
+static const bool isGMT5OrHigher = true;
 
 }
 

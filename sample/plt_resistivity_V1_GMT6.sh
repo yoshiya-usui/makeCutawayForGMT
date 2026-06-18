@@ -42,9 +42,7 @@ echo $ps_file
 shift=-0.5
 Boption=a${ah}f${fh}:"y(km)":/a${av}f${fv}:"z(km)":WSne
 
-grep Z $in_file | awk '{print $3}' > value.txt 
-awk '{if ($1 == ">") print $0; else printf "%15.6e%15.6e\n", -$1, $2 }' $in_file > tmp.txt
-gmt psxy tmp.txt -CRes.cpt -G+z -Zvalue.txt -JX$AreaSize -R$Hrange/$Vrange -B$Boption -P -X4 -Y8 -K -V -L > $ps_file
+gmt psxy $in_file -CRes.cpt -JX$AreaSize -R$Hrange/$Vrange -B$Boption -P -X4 -Y8 -K -V -L > $ps_file
 gmt psscale -CRes.cpt -Dx10/-1.5/7.0/0.5h -N  -Bf1a1:"Resistivity [log(@~W@~m)]": -U/0/-5/$ps_file -X2 -Y-2 -O -P -V >> $ps_file
 
 # -- remove temp files --

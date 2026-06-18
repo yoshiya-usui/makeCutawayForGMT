@@ -15,6 +15,8 @@ OBJS          = main.o \
                 MeshDataBrickElement.o \
                 MeshDataNonConformingHexaElement.o \
                 ResistivityBlock.o \
+                ResistivityBlockIsotropic.o \
+                ResistivityBlockAnisotropic.o \
                 Util.o
 PROGRAM       = makeCutawayForGMT
 

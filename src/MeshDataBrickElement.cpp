@@ -39,10 +39,10 @@
 
 // Constructer
 MeshDataBrickElement::MeshDataBrickElement():
-	m_numElemX(NULL),
-	m_numElemY(NULL),
-	m_numElemZ(NULL),
-	m_numAirLayer(NULL),
+	m_numElemX(0),
+	m_numElemY(0),
+	m_numElemZ(0),
+	m_numAirLayer(0),
 	m_edgeLength(NULL)
 {
 	m_numNodeOneElement = 8;

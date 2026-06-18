@@ -1,5 +1,5 @@
-//--------------------------------------------------------------------------
-// MIT License
+//-------------------------------------------------------------------------------------------------------
+// The MIT License (MIT)
 //
 // Copyright (c) 2021 Yoshiya Usui
 //
@@ -20,43 +20,36 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
-//--------------------------------------------------------------------------
+//-------------------------------------------------------------------------------------------------------
 #ifndef DBLDEF_RESISTIVITY_BLOCK
 #define DBLDEF_RESISTIVITY_BLOCK
 
-#include <iostream>
 #include <vector>
-#include <stdlib.h>
+#include <iostream>
+#include <cstdlib>
 
 // Class of resistivity blocks
 class ResistivityBlock{
 
 public:
+
 	// Constructer
 	ResistivityBlock();
 
 	// Destructer
-	~ResistivityBlock();
+	virtual ~ResistivityBlock();
+
+	// Get number of unfixed resistivity parameters
+	virtual int getNumberOfUnfixedResistivityParameters() const = 0;
 
 	// Read data of resisitivity block model from input file
-	void inputResisitivityBlock(const int iterNum);
+	void inputResistivityBlock(const int iterationNumInit);
 
 	// Get resisitivity block ID from element ID
-	inline int getBlockIDFromElemID( const int ielem ) const{
-		return m_elementID2blockID[ ielem ];
-	};
+	int getBlockIDFromElemID(const int ielem) const;
 
-	// Get resistivity values from resisitivity block ID
-	double getResistivityValuesFromBlockID( const int iblk ) const;
-
-	// Get conductivity values from resisitivity block ID
-	double getConductivityValuesFromBlockID( const int iblk ) const;
-
-	// Get resistivity values from element ID
-	double getResistivityValuesFromElemID( const int ielem ) const;
-
-	// Get conductivity values from element ID
-	double getConductivityValuesFromElemID( const int ielem ) const;
+	// Get arrays of elements belonging to a specified resistivity block
+	const std::vector<int>& getBlockID2Elements(const int iBlk) const;
 
 	// Get model ID from block ID
 	int getModelIDFromBlockID( const int iblk ) const;
@@ -66,20 +59,32 @@ public:
 
 	// Get total number of resistivity blocks
 	int getNumResistivityBlockTotal() const;
-
-	// Get number of resistivity blocks whose resistivity values are not fixed
-	int getNumResistivityBlockNotFixed() const;
-
-	// Get flag specifing whether resistivity value of each block is fixed or not
-	bool isFixedResistivityValue( const int iblk ) const;
-
-	// Calculate volume of the specified resistivity block
-	double calcVolumeOfBlock( int iblk ) const;
-
-	// Get arrays of elements belonging to each resistivity model
-	const std::vector< std::pair<int,double> >&  getBlockID2Elements( const int iBlk ) const;
 	
+protected:
+
+	// Total number of resistivity blocks
+	int m_numResistivityBlockTotal;
+
+	// Array of the resistivity block IDs of each element
+	int* m_elementID2blockID;
+
+	// Arrays of elements belonging to each resistivity model
+	std::vector<int>* m_blockID2Elements;
+
+	// Array convert model IDs to IDs of resistivity block  
+	int* m_modelID2blockID;
+
+	// Array convert IDs of resistivity block to model IDs 
+	int* m_blockID2modelID;
+
+	// Array of minimum resistivity values of each block
+	double* m_resistivityValuesMin;
+
+	// Array of maximum resistivity values of each block
+	double* m_resistivityValuesMax;
+
 private:
+
 	// Copy constructer
 	ResistivityBlock(const ResistivityBlock& rhs){
 		std::cerr << "Error : Copy constructer of the class ResistivityBlock is not implemented." << std::endl;
@@ -92,35 +97,8 @@ private:
 		exit(1);
 	};
 
-	// Array of the resistivity block IDs of each element
-	int* m_elementID2blockID;
-
-	// Array convert IDs of resistivity block to model IDs 
-	int* m_blockID2modelID;
-
-	// Array convert model IDs to IDs of resistivity block  
-	int* m_modelID2blockID;
-
-	// Total number of resistivity blocks
-	int m_numResistivityBlockTotal;
-
-	// Number of resistivity blocks whose resistivity values are fixed
-	int m_numResistivityBlockNotFixed;
-
-	// Array of resistivity values of each block
-	double* m_resistivityValues;
-
-	// Array of previous resistivity values of each block
-	double* m_resistivityValuesPre;
-
-	// Array of resistivity values obtained by inversion which is the ones fully updated ( damping factor = 1 )
-	double* m_resistivityValuesUpdatedFull;
-
-	// Flag specifing whether resistivity value of each block is fixed or not
-	bool* m_fixResistivityValues;
-
-	// Arrays of elements belonging to each resistivity model
-	std::vector< std::pair<int,double> >* m_blockID2Elements;
+	// Read reslstivity values from input file
+	virtual void inputResistivityValues( const int nElem, std::ifstream& inFile ) = 0;
 
 };
 
